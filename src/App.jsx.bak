@@ -1,0 +1,211 @@
+import { useEffect, useState } from 'react'
+import './App.css'
+import { db } from './firebase/config';
+import { addDoc, collection,  doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import  useCollback from './hook/useCollback';
+
+function App() {
+  const {data:colculation} = useCollback("colculation")
+
+  const [title, setTitle] = useState(null)
+  const [price, setPrice] = useState(null)
+  const [img, setImg] = useState(null)
+  const [text, setText] = useState(null)
+
+  const [editId, setEditId] = useState(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editPrice, setEditPrice] = useState('')
+  const [editImg, setEditImg] = useState('')
+  const [editText, setEditText] = useState('')
+
+    const deleteDocument = async (id) => {
+      deleteDoc(doc(db, "colculation", id))
+      .then(() => console.log("success"))
+      .catch((error) => alert(error.message))
+    }
+
+    const editDocument = (id) => {
+      const item = colculation.find(d => d.id === id)
+      setEditId(id)
+      setEditTitle(item.title)
+      setEditPrice(item.price)
+      setEditImg(item.img)
+      setEditText(item.text)
+    }
+
+    const handleEditSubmit = async (e) => {
+      e.preventDefault()
+      try {
+        await updateDoc(doc(db, "colculation", editId), {
+          title: editTitle,
+          price: Number(editPrice),
+          img: editImg,
+          text: editText
+        })
+        setEditId(null)
+      } catch (error) {
+        alert(error.message)
+      }
+    }
+
+    const cancelEdit = () => {
+      setEditId(null)
+    }
+
+
+  const hendleSubmit = (e) => {
+    e.preventDefault()
+    addDoc(collection(db, "colculation"), {
+      title: title,
+      price: Number(price),
+      img: img,
+      text:text
+
+    })
+
+    .then(()=> console.log("sacces"))
+    .catch((error)=> alert(error.message))
+    e.target.reset();
+    setTitle(null);
+    setPrice(null);
+    setImg(null);
+    setText(null)
+  }
+
+
+
+
+
+
+
+      {editId && (
+        <div className="modal-overlay" onClick={cancelEdit}>
+          <form className="edit-modal" onSubmit={handleEditSubmit} onClick={(e) => e.stopPropagation()}>
+            <h2>Edit Product</h2>
+            
+            <label className="form-label">
+              <span className="form-span">Title:</span>
+              <br />
+              <input
+                className="form-input"
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+              />
+            </label>
+
+            <label className="form-label">
+              <span className="form-span">Price:</span>
+              <br />
+              <input
+                className="form-input"
+                type="number"
+                value={editPrice}
+                onChange={(e) => setEditPrice(e.target.value)}
+              />
+            </label>
+
+            <label className="form-label">
+              <span className="form-span">Img:</span>
+              <br />
+              <input
+                className="form-input"
+                type="text"
+                value={editImg}
+                onChange={(e) => setEditImg(e.target.value)}
+              />
+            </label>
+
+            <label className="form-label">
+              <span className="form-span">Text:</span>
+              <br />
+              <input
+                className="form-input"
+                type="text"
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+              />
+            </label>
+
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button type="submit" className="btn" style={{flex: 1}}>Save</button>
+              <button type="button" className="btn" style={{flex: 1, background: 'linear-gradient(135deg, #ef4444, #dc2626)'}} onClick={cancelEdit}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+  return (
+    <>
+      <h1>Firebeys</h1>
+
+
+<form className="form" onSubmit={hendleSubmit}>
+  <label className="form-label">
+    <span className="form-span">Title:</span>
+    <br />
+    <input
+      className="form-input"
+      type="text"
+      onChange={(e) => setTitle(e.target.value)}
+    />
+  </label>
+
+  <br /><br />
+
+  <label className="form-label">
+    <span className="form-span">Price:</span>
+    <br />
+    <input
+      className="form-input"
+      type="number"
+      onChange={(e) => setPrice(e.target.value)}
+    />
+  </label>
+
+  <label className="form-label">
+    <span className="form-span">Img:</span>
+    <br />
+    <input
+      className="form-input"
+      type="text"
+      onChange={(e) => setImg(e.target.value)}
+    />
+  </label>
+
+  <label className="form-label">
+    <span className="form-span">Text:</span>
+    <br />
+    <input
+      className="form-input"
+      type="text"
+      onChange={(e) => setText(e.target.value)}
+    />
+  </label>
+
+  <button className="btn">Add</button>
+</form>
+
+
+      {colculation &&
+        colculation.map((item) => (
+          <div className='idv' key={item.id}>
+            <div className='div' >
+              <img src={item.img} alt={item.img} />
+              <h3>{item.title} </h3>
+              <p>{item.price} $</p>
+              <p className='aa'>{item.text}</p>
+              <div style={{display: 'flex', gap: '10px'}}>
+                <button className='btn1' onClick={()=> editDocument(item.id)} style={{flex: 1}}>✏️</button>
+                <button className='btn1' onClick={()=> deleteDocument(item.id)} style={{flex: 1}}>Delete</button>
+              </div>
+            </div>
+          </div>
+        ))}
+    </>
+  )
+
+}
+
+export default App
+
