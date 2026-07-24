@@ -1,12 +1,22 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
 import { db } from './firebase/config';
 import { addDoc, collection, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import useCollback from './hook/useCollback';
+import { LANGUAGES, ui, cert, getInitialLang, persistLang } from './i18n';
 
 function App() {
   const { data: callbackData } = useCollback('colculation')
   const calculation = callbackData || []
+
+  const [lang, setLang] = useState(getInitialLang)
+  const t = ui[lang]
+  const c = cert[lang]
+
+  useEffect(() => {
+    persistLang(lang)
+    document.documentElement.lang = lang
+  }, [lang])
 
   const [darkMode, setDarkMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -28,6 +38,17 @@ function App() {
   const [editMentorName, setEditMentorName] = useState('')
   const [editCertificateDate, setEditCertificateDate] = useState('')
 
+  const [toasts, setToasts] = useState([])
+  const [exportLoading, setExportLoading] = useState(null) // 'pdf' | 'word' | 'ppt' | 'print' | null
+
+  const showToast = (message, type = 'success') => {
+    const id = Date.now() + Math.random()
+    setToasts((prev) => [...prev, { id, message, type }])
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id))
+    }, 3500)
+  }
+
   // Metrics
   const totalCount = calculation.length
   const frontendCount = calculation.filter(i => (i.course || i.text || 'Frontend') === 'Frontend').length
@@ -36,8 +57,8 @@ function App() {
 
   const deleteDocument = async (id) => {
     deleteDoc(doc(db, 'colculation', id))
-      .then(() => console.log('success'))
-      .catch((error) => alert(error.message))
+      .then(() => showToast(t.toastDeleted, 'success'))
+      .catch((error) => showToast(error.message, 'error'))
   }
 
   const editDocument = (id) => {
@@ -65,8 +86,9 @@ function App() {
         certificateDate: editCertificateDate,
       })
       setEditId(null)
+      showToast(t.toastUpdated, 'success')
     } catch (error) {
-      alert(error.message)
+      showToast(error.message, 'error')
     }
   }
 
@@ -79,9 +101,14 @@ function App() {
   }
 
   const handlePrintDownload = () => {
-    if (certificatePreview) {
+    if (!certificatePreview) return
+    setExportLoading('print')
+    // Give the browser a tick to paint the loading state before the
+    // print dialog blocks the main thread.
+    setTimeout(() => {
       window.print()
-    }
+      setExportLoading(null)
+    }, 150)
   }
 
   const handleDownloadPDF = async () => {
@@ -89,15 +116,24 @@ function App() {
     const element = document.querySelector('.certificate-container')
     if (!element) return
 
-    const html2pdf = window.html2pdf || (await import('html2pdf.js')).default
-    const options = {
-      margin: 0,
-      filename: `${certificatePreview.fullName || 'Sertifikat'}_${certificatePreview.surname || ''}_sertifikat.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 3, useCORS: true, logging: false },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
+    setExportLoading('pdf')
+    try {
+      const html2pdf = window.html2pdf || (await import('html2pdf.js')).default
+      const options = {
+        margin: 0,
+        filename: `${certificatePreview.fullName || 'Sertifikat'}_${certificatePreview.surname || ''}_sertifikat.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 3, useCORS: true, logging: false },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
+      }
+      await html2pdf().set(options).from(element).save()
+      showToast(t.toastPdfOk, 'success')
+    } catch (err) {
+      console.error('PDF export error:', err)
+      showToast(t.toastPdfErr + err.message, 'error')
+    } finally {
+      setExportLoading(null)
     }
-    html2pdf().set(options).from(element).save()
   }
 
   const handleDownloadWord = async () => {
@@ -105,16 +141,18 @@ function App() {
     const element = document.querySelector('.certificate-container')
     if (!element) return
 
+    setExportLoading('word')
     try {
       const html2canvas = (await import('html2canvas')).default
-      const canvas = await html2canvas(element, { scale: 2, useCORS: true })
-      
-      const imageArrayBuffer = await new Promise((resolve) => {
+      const canvas = await html2canvas(element, { scale: 3, useCORS: true, logging: false })
+
+      const imageArrayBuffer = await new Promise((resolve, reject) => {
         canvas.toBlob((blob) => {
-          blob.arrayBuffer().then(resolve)
+          if (!blob) { reject(new Error('Canvas -> blob konversiyasi muvaffaqiyatsiz')); return }
+          blob.arrayBuffer().then(resolve).catch(reject)
         }, 'image/png')
       })
-      
+
       const { Document, Packer, Paragraph, ImageRun, PageOrientation } = await import('docx')
       const doc = new Document({
         sections: [{
@@ -143,7 +181,7 @@ function App() {
           ],
         }],
       })
-      
+
       const blob = await Packer.toBlob(doc)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -151,9 +189,12 @@ function App() {
       a.download = `${certificatePreview.fullName || 'Sertifikat'}_${certificatePreview.surname || ''}_sertifikat.docx`
       a.click()
       URL.revokeObjectURL(url)
+      showToast(t.toastWordOk, 'success')
     } catch (err) {
       console.error('Word export error:', err)
-      alert('Word eksportida xatolik yuz berdi: ' + err.message)
+      showToast(t.toastWordErr + err.message, 'error')
+    } finally {
+      setExportLoading(null)
     }
   }
 
@@ -162,16 +203,17 @@ function App() {
     const element = document.querySelector('.certificate-container')
     if (!element) return
 
+    setExportLoading('ppt')
     try {
       const html2canvas = (await import('html2canvas')).default
-      const canvas = await html2canvas(element, { scale: 2, useCORS: true })
+      const canvas = await html2canvas(element, { scale: 3, useCORS: true, logging: false })
       const dataUrl = canvas.toDataURL('image/png')
 
       const PptxGenJS = (await import('pptxgenjs')).default
       const prs = new PptxGenJS()
       prs.defineLayout({ name: 'A4_LANDSCAPE', width: 10, height: 7.07 })
       let slide = prs.addSlide('A4_LANDSCAPE')
-      
+
       slide.addImage({
         data: dataUrl,
         x: 0,
@@ -180,10 +222,13 @@ function App() {
         h: 7.07
       })
 
-      prs.writeFile({ fileName: `${certificatePreview.fullName || 'Sertifikat'}_${certificatePreview.surname || ''}_sertifikat.pptx` })
+      await prs.writeFile({ fileName: `${certificatePreview.fullName || 'Sertifikat'}_${certificatePreview.surname || ''}_sertifikat.pptx` })
+      showToast(t.toastPptOk, 'success')
     } catch (err) {
       console.error('PPT export error:', err)
-      alert('PowerPoint eksportida xatolik yuz berdi: ' + err.message)
+      showToast(t.toastPptErr + err.message, 'error')
+    } finally {
+      setExportLoading(null)
     }
   }
 
@@ -199,8 +244,8 @@ function App() {
       certificateDate,
       createdAt: new Date(),
     })
-      .then(() => console.log('sacces'))
-      .catch((error) => alert(error.message))
+      .then(() => showToast(t.toastCreated, 'success'))
+      .catch((error) => showToast(error.message, 'error'))
 
     e.target.reset()
     setFullName('')
@@ -214,6 +259,15 @@ function App() {
 
   return (
     <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast toast-${t.type}`}>
+            <span className="toast-icon">{t.type === 'success' ? '✅' : t.type === 'error' ? '⚠️' : 'ℹ️'}</span>
+            <span className="toast-message">{t.message}</span>
+          </div>
+        ))}
+      </div>
+
       <nav className="topbar">
         <div className="brand">
           <div className="brand-badge-icon">
@@ -230,8 +284,8 @@ function App() {
             </svg>
           </div>
           <div>
-            <h2>TARGET IT ACADEMY</h2>
-            <p>Sertifikatlar Boshqaruv Markazi</p>
+            <h2>{t.brandTitle}</h2>
+            <p>{t.brandSubtitle}</p>
           </div>
         </div>
 
@@ -240,32 +294,44 @@ function App() {
             className={`tab-btn ${selectedCourse === 'Frontend' ? 'active' : ''}`}
             onClick={() => setSelectedCourse('Frontend')}
           >
-            Frontend ({frontendCount})
+            {t.tabFrontend} ({frontendCount})
           </button>
           <button 
             className={`tab-btn ${selectedCourse === 'Backend' ? 'active' : ''}`}
             onClick={() => setSelectedCourse('Backend')}
           >
-            Backend ({backendCount})
+            {t.tabBackend} ({backendCount})
           </button>
           <button 
             className={`tab-btn ${selectedCourse === 'English' ? 'active' : ''}`}
             onClick={() => setSelectedCourse('English')}
           >
-            English ({englishCount})
+            {t.tabEnglish} ({englishCount})
           </button>
         </div>
 
         <div className="topbar-actions">
+          <div className="lang-switch" role="group" aria-label="Language">
+            {LANGUAGES.map((l) => (
+              <button
+                key={l.code}
+                className={`lang-btn ${lang === l.code ? 'active' : ''}`}
+                onClick={() => setLang(l.code)}
+                title={l.name}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
           <button 
             className="theme-toggle-btn"
             onClick={() => setDarkMode(!darkMode)}
-            title={darkMode ? "Yorug' rejimga o'tish" : "Qorong'u rejimga o'tish"}
+            title={darkMode ? t.themeToLight : t.themeToDark}
           >
             {darkMode ? '☀️' : '🌙'}
           </button>
           <button className="add-btn" onClick={() => setShowForm(true)}>
-            + Yangi Sertifikat
+            {t.addCertificate}
           </button>
         </div>
       </nav>
@@ -273,29 +339,29 @@ function App() {
       <header className="hero">
         <div className="hero-content">
           <div className="hero-text-block">
-            <span className="eyebrow">Rasmiy Sertifikat Tizimi</span>
-            <h1>Talabalar Sertifikatlarini Boshqarish</h1>
+            <span className="eyebrow">{t.heroEyebrow}</span>
+            <h1>{t.heroTitle}</h1>
             <p className="hero-text">
-              Target IT Academy rasmiy sertifikatlarini yaratish, tahrirlash, hamda Print, PDF, Word va PowerPoint formatlarida 1-ga-1 eksport qilish platformasi.
+              {t.heroText}
             </p>
           </div>
 
           <div className="hero-stats-row">
             <div className="stat-card">
               <span className="stat-number">{totalCount}</span>
-              <span className="stat-label">Jami Sertifikatlar</span>
+              <span className="stat-label">{t.statTotal}</span>
             </div>
             <div className="stat-card">
               <span className="stat-number">{frontendCount}</span>
-              <span className="stat-label">Frontend</span>
+              <span className="stat-label">{t.tabFrontend}</span>
             </div>
             <div className="stat-card">
               <span className="stat-number">{backendCount}</span>
-              <span className="stat-label">Backend</span>
+              <span className="stat-label">{t.tabBackend}</span>
             </div>
             <div className="stat-card">
               <span className="stat-number">{englishCount}</span>
-              <span className="stat-label">English</span>
+              <span className="stat-label">{t.tabEnglish}</span>
             </div>
           </div>
         </div>
@@ -306,7 +372,7 @@ function App() {
           <input 
             type="text" 
             className="search-input" 
-            placeholder="Talaba ismi yoki familiyasi bo'yicha tezkor qidiruv..." 
+            placeholder={t.searchPlaceholder} 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -321,16 +387,37 @@ function App() {
           <div className="certificate-modal" onClick={(e) => e.stopPropagation()}>
             <button className="close-btn" onClick={() => setCertificatePreview(null)}>×</button>
             <div className="action-buttons">
-              <button className="download-btn pdf-btn" onClick={handleDownloadPDF} title="PDF sifatida yuklab olish">
-                📄 PDF
+              <button
+                className="download-btn pdf-btn"
+                onClick={handleDownloadPDF}
+                disabled={!!exportLoading}
+                title={t.pdfTitle}
+              >
+                {exportLoading === 'pdf' ? <span className="btn-spinner" /> : '📄'} {t.pdfBtn}
               </button>
-              <button className="download-btn word-btn" onClick={handleDownloadWord} title="Word sifatida yuklab olish">
-                📝 Word
+              <button
+                className="download-btn word-btn"
+                onClick={handleDownloadWord}
+                disabled={!!exportLoading}
+                title={t.wordTitle}
+              >
+                {exportLoading === 'word' ? <span className="btn-spinner" /> : '📝'} {t.wordBtn}
               </button>
-              <button className="download-btn ppt-btn" onClick={handleDownloadPowerPoint} title="PowerPoint sifatida yuklab olish">
-                📊 PowerPoint
+              <button
+                className="download-btn ppt-btn"
+                onClick={handleDownloadPowerPoint}
+                disabled={!!exportLoading}
+                title={t.pptTitle}
+              >
+                {exportLoading === 'ppt' ? <span className="btn-spinner" /> : '📊'} {t.pptBtn}
               </button>
-              <button className="print-btn" onClick={handlePrintDownload}>🖨️ Print</button>
+              <button
+                className="print-btn"
+                onClick={handlePrintDownload}
+                disabled={!!exportLoading}
+              >
+                {exportLoading === 'print' ? <span className="btn-spinner" /> : '🖨️'} {t.printBtn}
+              </button>
             </div>
             
             <div className="certificate-container" id="certificate-node">
@@ -403,8 +490,8 @@ function App() {
 
                 {/* Organization Header Text */}
                 <div className="cert-org-header">
-                  <p>O'ZBEKISTON RESPUBLIKASI TOSHKENT SHAHRI</p>
-                  <p className="org-bold">"TARGET IT ACADEMY" MA'SULIYATI CHEKLANGAN JAMIYAT TOMONIDAN</p>
+                  <p>{c.orgLine1}</p>
+                  <p className="org-bold">{c.orgLine2}</p>
                 </div>
 
                 {/* Student Name Section */}
@@ -413,24 +500,24 @@ function App() {
                     <span className="name-value">
                       {certificatePreview.fullName || 'Ali'} {certificatePreview.surname || 'Karimov'}
                     </span>
-                    <span className="ga-label">ga</span>
+                    {c.gaLabel && <span className="ga-label">{c.gaLabel}</span>}
                   </div>
                 </div>
 
                 {/* Course Details */}
                 <div className="cert-course-details">
                   <h3 className="course-title-quotes">
-                    "WEB DASTURLASH - {certificatePreview.course ? certificatePreview.course.toUpperCase() : 'FRONTEND VA BACKEND'}"
+                    "{c.courseTitlePrefix} {certificatePreview.course ? certificatePreview.course.toUpperCase() : c.defaultCourse}"
                   </h3>
                   <p className="course-subtitle">
-                    YO'NALISHINI MUVAFFAQIYATLI TAMOMLAGANLIGI UCHUN
+                    {c.courseSubtitle}
                   </p>
                 </div>
 
                 {/* Sertifikat Title */}
                 <div className="cert-main-title-box">
-                  <h1 className="cert-big-title">SERTIFIKAT</h1>
-                  <p className="cert-taqdim-text">TAQDIM ETILDI</p>
+                  <h1 className="cert-big-title">{c.bigTitle}</h1>
+                  <p className="cert-taqdim-text">{c.taqdimText}</p>
                 </div>
 
                 {/* Footer Metadata */}
@@ -439,15 +526,15 @@ function App() {
                     <div className="sig-line">
                       <span className="item-value">
                         {certificatePreview.certificateDate 
-                          ? new Date(certificatePreview.certificateDate).toLocaleDateString('uz-UZ') 
+                          ? new Date(certificatePreview.certificateDate).toLocaleDateString(lang === 'uz' ? 'uz-UZ' : lang === 'ru' ? 'ru-RU' : 'en-GB') 
                           : '12.05.2024'}
                       </span>
                     </div>
-                    <span className="item-label">Sana</span>
+                    <span className="item-label">{c.dateLabel}</span>
                   </div>
 
                   <div className="footer-item mentor-item">
-                    <span className="item-label-top">Mentor:</span>
+                    <span className="item-label-top">{c.mentorLabel}</span>
                     <div className="sig-line">
                       <span className="item-value">
                         {certificatePreview.mentorName || "No'monjonov Shoxruhmirzo"}
@@ -456,7 +543,7 @@ function App() {
                   </div>
 
                   <div className="footer-item director-item">
-                    <span className="item-label-top">Direktor:</span>
+                    <span className="item-label-top">{c.directorLabel}</span>
                     <div className="sig-line signature-wrapper">
                       <span className="item-value">Sayfuddinov Abdulloh</span>
                       {/* Authentic Blue Ink Signature Overlay */}
@@ -469,7 +556,18 @@ function App() {
                 </div>
 
                 {/* Bottom Left Codes */}
-                <div className="cert-codes-row">
+                <div
+                  className="cert-codes-row cert-codes-copyable"
+                  title={lang === 'uz' ? 'Nusxalash uchun bosing' : lang === 'ru' ? 'Нажмите, чтобы скопировать' : 'Click to copy'}
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText('NAS.UZ001 / MT.0324-05')
+                      showToast(t.toastCodeCopied, 'success')
+                    } catch {
+                      // clipboard API unavailable — silently ignore
+                    }
+                  }}
+                >
                   <span>NAS.UZ001</span>
                   <span>MT.0324-05</span>
                 </div>
@@ -528,10 +626,10 @@ function App() {
                   <line x1="52" y1="84" x2="108" y2="84" stroke="#fef08a" strokeWidth="1" />
                   
                   <text x="80" y="93" textAnchor="middle" fill="#fef08a" fontSize="6.5" fontWeight="bold">
-                    XUJJATLAR
+                    {c.sealFooter1}
                   </text>
                   <text x="80" y="101" textAnchor="middle" fill="#fef08a" fontSize="6.5" fontWeight="bold">
-                    UCHUN
+                    {c.sealFooter2}
                   </text>
                 </svg>
               </div>
@@ -545,8 +643,8 @@ function App() {
           <form className="modal-card" onSubmit={handleEditSubmit} onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div>
-                <p className="eyebrow">Tahrirlash</p>
-                <h2>Sertifikat ma'lumotlari</h2>
+                <p className="eyebrow">{t.editEyebrow}</p>
+                <h2>{t.editTitle}</h2>
               </div>
               <button type="button" className="close-btn" onClick={cancelEdit}>
                 ×
@@ -554,7 +652,7 @@ function App() {
             </div>
 
             <label className="field">
-              <span>Ism</span>
+              <span>{t.fieldFirstName}</span>
               <input
                 type="text"
                 value={editFullName}
@@ -563,7 +661,7 @@ function App() {
             </label>
 
             <label className="field">
-              <span>Familiya</span>
+              <span>{t.fieldLastName}</span>
               <input
                 type="text"
                 value={editSurname}
@@ -572,35 +670,35 @@ function App() {
             </label>
 
             <label className="field">
-              <span>Kurs</span>
+              <span>{t.fieldCourse}</span>
               <select value={editCourse} onChange={(e) => setEditCourse(e.target.value)}>
-                <option value="Frontend">Frontend</option>
-                <option value="Backend">Backend</option>
-                <option value="English">English</option>
+                <option value="Frontend">{t.tabFrontend}</option>
+                <option value="Backend">{t.tabBackend}</option>
+                <option value="English">{t.tabEnglish}</option>
               </select>
             </label>
 
             <label className="field">
-              <span>Holat</span>
+              <span>{t.fieldStatus}</span>
               <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
-                <option value="Yakunlangan">Yakunlangan</option>
-                <option value="Jarayonda">Jarayonda</option>
-                <option value="Sertifikat olgan">Sertifikat olgan</option>
+                <option value="Yakunlangan">{t.statusDone}</option>
+                <option value="Jarayonda">{t.statusProgress}</option>
+                <option value="Sertifikat olgan">{t.statusCertified}</option>
               </select>
             </label>
 
             <label className="field">
-              <span>Usozning ismi</span>
+              <span>{t.fieldMentor}</span>
               <input
                 type="text"
                 value={editMentorName}
                 onChange={(e) => setEditMentorName(e.target.value)}
-                placeholder="Masalan: No'monjonov Shoxruh mirzo"
+                placeholder={t.placeholderMentor}
               />
             </label>
 
             <label className="field">
-              <span>Sertifikat sanasi</span>
+              <span>{t.fieldDate}</span>
               <input
                 type="date"
                 value={editCertificateDate}
@@ -609,9 +707,9 @@ function App() {
             </label>
 
             <div className="modal-actions">
-              <button type="submit" className="submit-btn">Saqlash</button>
+              <button type="submit" className="submit-btn">{t.save}</button>
               <button type="button" className="cancel-btn" onClick={cancelEdit}>
-                Bekor qilish
+                {t.cancel}
               </button>
             </div>
           </form>
@@ -623,8 +721,8 @@ function App() {
           <form className="modal-card" onSubmit={handleSubmit} onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div>
-                <p className="eyebrow">Yangi sertifikat</p>
-                <h2>Add sertifikat</h2>
+                <p className="eyebrow">{t.newCertEyebrow}</p>
+                <h2>{t.newCertTitle}</h2>
               </div>
               <button type="button" className="close-btn" onClick={() => setShowForm(false)}>
                 ×
@@ -632,55 +730,55 @@ function App() {
             </div>
 
             <label className="field">
-              <span>Ism</span>
+              <span>{t.fieldFirstName}</span>
               <input
                 type="text"
-                placeholder="Masalan: Ali"
+                placeholder={t.placeholderFirstName}
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
               />
             </label>
 
             <label className="field">
-              <span>Familiya</span>
+              <span>{t.fieldLastName}</span>
               <input
                 type="text"
-                placeholder="Masalan: Karimov"
+                placeholder={t.placeholderLastName}
                 value={surname}
                 onChange={(e) => setSurname(e.target.value)}
               />
             </label>
 
             <label className="field">
-              <span>Kurs</span>
+              <span>{t.fieldCourse}</span>
               <select value={course} onChange={(e) => setCourse(e.target.value)}>
-                <option value="Frontend">Frontend</option>
-                <option value="Backend">Backend</option>
-                <option value="English">English</option>
+                <option value="Frontend">{t.tabFrontend}</option>
+                <option value="Backend">{t.tabBackend}</option>
+                <option value="English">{t.tabEnglish}</option>
               </select>
             </label>
 
             <label className="field">
-              <span>Holat</span>
+              <span>{t.fieldStatus}</span>
               <select value={status} onChange={(e) => setStatus(e.target.value)}>
-                <option value="Yakunlangan">Yakunlangan</option>
-                <option value="Jarayonda">Jarayonda</option>
-                <option value="Sertifikat olgan">Sertifikat olgan</option>
+                <option value="Yakunlangan">{t.statusDone}</option>
+                <option value="Jarayonda">{t.statusProgress}</option>
+                <option value="Sertifikat olgan">{t.statusCertified}</option>
               </select>
             </label>
 
             <label className="field">
-              <span>Usozning ismi</span>
+              <span>{t.fieldMentor}</span>
               <input
                 type="text"
-                placeholder="Masalan: No'monjonov Shoxruh mirzo"
+                placeholder={t.placeholderMentor}
                 value={mentorName}
                 onChange={(e) => setMentorName(e.target.value)}
               />
             </label>
 
             <label className="field">
-              <span>Sertifikat sanasi</span>
+              <span>{t.fieldDate}</span>
               <input
                 type="date"
                 value={certificateDate}
@@ -688,7 +786,7 @@ function App() {
               />
             </label>
 
-            <button className="submit-btn">Saqlash</button>
+            <button className="submit-btn">{t.save}</button>
           </form>
         </div>
       )}
@@ -706,11 +804,33 @@ function App() {
           })
 
           if (filtered.length === 0) {
+            let crossTabHint = null
+            if (searchQuery.trim()) {
+              const q = searchQuery.toLowerCase().trim()
+              const otherCourses = ['Frontend', 'Backend', 'English'].filter((c) => c !== selectedCourse)
+              const foundIn = otherCourses.find((c) =>
+                calculation.some((item) => {
+                  const itemCourse = item.course || item.text || 'Frontend'
+                  if (itemCourse !== c) return false
+                  const fullNameStr = `${item.fullName || item.title || ''} ${item.surname || ''}`.toLowerCase()
+                  return fullNameStr.includes(q)
+                })
+              )
+              if (foundIn) {
+                const foundInLabel = foundIn === 'Frontend' ? t.tabFrontend : foundIn === 'Backend' ? t.tabBackend : t.tabEnglish
+                crossTabHint = (
+                  <button className="empty-cta-btn" onClick={() => setSelectedCourse(foundIn)}>
+                    {t.goToSection(foundInLabel)}
+                  </button>
+                )
+              }
+            }
             return (
               <div className="empty-state">
                 <div className="empty-icon">📜</div>
-                <h3>{searchQuery ? 'Qidiruv bo‘yicha sertifikat topilmadi' : 'Hozircha ushbu bo‘limda sertifikat yo‘q'}</h3>
-                <p>{searchQuery ? 'Boshqa ism yoki familiya kiritib ko‘ring.' : 'Yuqoridagi "+ Yangi Sertifikat" tugmasini bosib birinchi sertifikatni saqlang.'}</p>
+                <h3>{searchQuery ? t.emptySearchTitle : t.emptyListTitle}</h3>
+                <p>{searchQuery ? t.emptySearchText : t.emptyListText}</p>
+                {crossTabHint}
               </div>
             )
           }
@@ -718,10 +838,12 @@ function App() {
           return filtered.map((item) => {
             const displayName = `${item.fullName || item.title || 'Sertifikat'} ${item.surname || ''}`.trim()
             const courseName = item.course || item.text || 'Frontend'
-            const statusName = item.status || 'Yakunlangan'
+            const courseLabel = courseName === 'Frontend' ? t.tabFrontend : courseName === 'Backend' ? t.tabBackend : t.tabEnglish
+            const rawStatus = item.status || 'Yakunlangan'
+            const statusName = rawStatus === 'Yakunlangan' ? t.statusDone : rawStatus === 'Jarayonda' ? t.statusProgress : rawStatus === 'Sertifikat olgan' ? t.statusCertified : rawStatus
             const initials = (item.fullName || item.title || 'S').charAt(0).toUpperCase()
             const formattedDate = item.certificateDate 
-              ? new Date(item.certificateDate).toLocaleDateString('uz-UZ') 
+              ? new Date(item.certificateDate).toLocaleDateString(lang === 'uz' ? 'uz-UZ' : lang === 'ru' ? 'ru-RU' : 'en-GB') 
               : '12.05.2024'
 
             return (
@@ -738,29 +860,29 @@ function App() {
                   <div className="avatar-circle">{initials}</div>
                   <div className="user-details">
                     <h3>{displayName}</h3>
-                    <span className="course-pill">{courseName} Yo'nalishi</span>
+                    <span className="course-pill">{courseLabel} {t.directionSuffix}</span>
                   </div>
                 </div>
 
                 <div className="card-meta-info">
                   <div className="meta-item">
-                    <span className="meta-label">Mentor:</span>
+                    <span className="meta-label">{t.mentorLabel}</span>
                     <span className="meta-val">{item.mentorName || "No'monjonov Shoxruhmirzo"}</span>
                   </div>
                   <div className="meta-item">
-                    <span className="meta-label">Sana:</span>
+                    <span className="meta-label">{t.dateLabel}</span>
                     <span className="meta-val">{formattedDate}</span>
                   </div>
                 </div>
 
                 <div className="card-actions-grid">
-                  <button className="card-action-btn primary-action" onClick={() => handlePrintCertificate(item)} title="Sertifikatni Ko'rish va Chop etish">
-                    👁️ Ko'rish & Export
+                  <button className="card-action-btn primary-action" onClick={() => handlePrintCertificate(item)} title={t.viewExport}>
+                    👁️ {t.viewExport}
                   </button>
-                  <button className="card-action-btn edit-action" onClick={() => editDocument(item.id)} title="Tahrirlash">
-                    ✏️ Edit
+                  <button className="card-action-btn edit-action" onClick={() => editDocument(item.id)} title={t.edit}>
+                    ✏️ {t.edit}
                   </button>
-                  <button className="card-action-btn danger-action" onClick={() => deleteDocument(item.id)} title="O'chirish">
+                  <button className="card-action-btn danger-action" onClick={() => deleteDocument(item.id)} title={t.delete}>
                     🗑️
                   </button>
                 </div>
